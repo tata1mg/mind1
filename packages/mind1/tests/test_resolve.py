@@ -1,6 +1,7 @@
 """Outbound extraction + cross-repo resolver: consumer outbound -> provider interface edge."""
 from __future__ import annotations
 
+import pytest
 from mind1.adapters.outbound import discover_outbound
 from mind1.resolve import normalize_path, resolve
 from mind1.service.relationships import RelationshipService
@@ -231,6 +232,70 @@ def test_key_name_resolver_uses_the_key_when_the_value_is_uninformative():
     assert r.resolve(_b("http://localhost:1", "NOTIFYONE_CORE_URL"), ctx) == "notifyone-core"
     # a real host wins over the key name
     assert r.resolve(_b("http://other-svc:80", "NOTIFICATION_CORE.HOST"), ctx) is None
+
+
+def test_a_port_two_services_listen_on_identifies_neither():
+    """`identity.port` is what a service listens on, `binding.port` is what a caller dials.
+    Equating them holds only while one service owns the number."""
+    from mind1.adapters.hosts import PortResolver
+    r = PortResolver()
+    ctx = _ctx({"catalog", "pricing"}, ports={"4000": "catalog"},
+               ambiguous_ports={"4000"})
+    assert r.resolve(_b("http://localhost:4000"), ctx) is None
+
+
+def test_a_shared_port_lets_the_key_name_decide():
+    """The whole point of declining: the key named the target all along."""
+    from mind1.adapters.hosts import resolve_host
+    ctx = _ctx({"catalog", "pricing"}, ports={"4000": "catalog"},
+               ambiguous_ports={"4000"})
+    assert resolve_host(_b("http://localhost:4000", "PRICING.HOST"), ctx) == "pricing"
+
+
+def test_a_unique_port_still_resolves():
+    """Declining on collisions must not disable the resolver for dev configs."""
+    from mind1.adapters.hosts import resolve_host
+    ctx = _ctx({"core"}, ports={"9402": "core"}, ambiguous_ports={"4000"})
+    assert resolve_host(_b("http://localhost:9402", "SOMETHING_UNMATCHED.URL"), ctx) == "core"
+
+
+@pytest.mark.parametrize("host, expected", [
+    ("localhost", True),
+    ("0.0.0.0", True),
+    ("payments service host", True),      # prose written where an address belongs
+    ("DUMMY", True),
+    ("changeme", True),
+    ("your-host-here", True),
+    ("{{ service_host }}", True),         # nothing survives the substitution markers
+    ("< env_name >", True),
+    ("orders.{{ env }}.svc.cluster.local", False),   # `orders` survives, and names it
+    ("orders-svc", False),
+    ("internalapi.example.com", False),
+])
+def test_placeholder_detection(host, expected):
+    from mind1.adapters.hosts import is_placeholder
+    assert is_placeholder(host) is expected
+
+
+def test_the_key_is_read_for_any_host_that_names_nothing_not_only_loopback():
+    """An example config saying `DUMMY` is as uninformative as `localhost`."""
+    from mind1.adapters.hosts import KeyNameResolver
+    r = KeyNameResolver()
+    ctx = _ctx({"pricing"})
+    assert r.resolve(_b("DUMMY", "PRICING.HOST"), ctx) == "pricing"
+    assert r.resolve(_b("pricing service host", "PRICING.HOST"), ctx) == "pricing"
+    # and a host that does name something is still the better evidence
+    assert r.resolve(_b("http://catalog-svc:80", "PRICING.HOST"), ctx) is None
+
+
+def test_a_templated_host_is_not_treated_as_a_placeholder():
+    """Regression guard: `orders.{{ env }}.svc` names `orders`, and the k8s resolver reads
+    it. Treating every templated value as a placeholder would hand those to the key name,
+    which is often stale."""
+    from mind1.adapters.hosts import resolve_host
+    ctx = _ctx({"orders"})
+    binding = _b("http://orders.{{ env_name }}.svc.cluster.local", "LEGACY_NAME.HOST")
+    assert resolve_host(binding, ctx) == "orders"
 
 
 def test_service_identity_reads_own_port_and_name(tmp_path):

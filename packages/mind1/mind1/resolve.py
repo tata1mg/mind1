@@ -154,16 +154,23 @@ def resolve(knowledge: KnowledgeStore, rels: RelationshipStore, ctx: ContextStor
     declared_edges: dict[tuple[str, str], dict] = {}
     ports: dict[str, str] = {}
     aliases: dict[str, str] = {}
+    # A port claimed by more than one service identifies neither. Collected before any
+    # binding is resolved, because which services claim it is a fleet-level fact and the
+    # alternative, letting the first one seen win, decides it by name order.
+    claims: dict[str, set[str]] = {}
     for svc in services:
         ident = svc.payload.get("identity") or {}
         if ident.get("port"):
+            claims.setdefault(str(ident["port"]), set()).add(svc.object_id)
             ports.setdefault(str(ident["port"]), svc.object_id)
         if ident.get("name"):
             aliases.setdefault(slugish(ident["name"]), svc.object_id)
+    ambiguous_ports = {p for p, owners in claims.items() if len(owners) > 1}
     for svc in services:
         cslug = svc.object_id
         ctx_h = ResolveContext(slugs=slugs, declared=svc.payload.get("declared_hosts") or {},
-                               ports=ports, aliases=aliases)
+                               ports=ports, aliases=aliases,
+                               ambiguous_ports=ambiguous_ports)
         for b in svc.payload.get("host_bindings") or []:
             target = resolve_host(HostBinding(key=b.get("key", ""), value=b.get("value", ""),
                                               host=b.get("host", ""), port=b.get("port", "")), ctx_h)
