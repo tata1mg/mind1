@@ -44,6 +44,12 @@ _THIRD_PARTY = re.compile(
     r"(amazonaws\.com|googleapis\.com|google\.com|stripe\.com|twilio\.com|sentry\.io|"
     r"datadoghq\.com|slack\.com|github\.com|facebook\.com|cloudfront\.net|akamai)", re.I)
 
+# An unsubstituted template expression: `{{ env }}`, `{% if %}`, `< env_name >`.
+_TEMPLATE_EXPR = re.compile(r"\{\{.*?\}\}|\{%.*?%\}|<[^>]*>")
+# A word written where an address belongs, meaning "fill this in".
+_DUMMY = re.compile(r"^(dummy|changeme|change[-_]me|todo|fixme|x{2,}|placeholder|example|"
+                    r"none|null|na|tbd|(your|some|my)[-_].*)$", re.I)
+
 
 # `scheme://user:password@host` — the standard way a connection string carries a secret,
 # and the reason a DATABASE_URL or AMQP_URL cannot be stored as written.
@@ -77,6 +83,8 @@ class HostBinding:
     file: str = ""      # repo-relative config file
     host: str = ""      # bare hostname
     port: str = ""      # port, when the address carries one
+    #: The host names nothing, so only `key` can identify the target. See `is_placeholder`.
+    placeholder: bool = False
 
     def __post_init__(self):
         # Parse host and port from the value as written, then keep only the redacted form.
@@ -86,6 +94,7 @@ class HostBinding:
             self.host = bare_host(self.value)
         if not self.port:
             self.port = bare_port(self.value)
+        self.placeholder = is_placeholder(self.host)
         self.value = redact(self.value)
 
 
@@ -102,6 +111,8 @@ class ResolveContext:
     declared: dict = field(default_factory=dict)   # manifest `hosts:` mappings
     ports: dict = field(default_factory=dict)      # "9402" -> slug, from each service's config
     aliases: dict = field(default_factory=dict)    # "notification_core" -> slug
+    #: Ports more than one service listens on, so they identify none of them.
+    ambiguous_ports: set = field(default_factory=set)
 
 
 _LOOPBACK = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "host.docker.internal"}
@@ -123,6 +134,27 @@ def bare_host(value: str) -> str:
 
 def slugish(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
+
+
+def is_placeholder(host: str) -> bool:
+    """Whether a host carries no address at all, so only the key can identify the target.
+
+    Repositories ship example and template configs, and those values are written to be
+    replaced: `localhost`, `DUMMY`, `payments service host`, `< env_name >`. Reading one as
+    an address is how a config key that names its target exactly ends up resolved by
+    something else entirely.
+
+    Template expressions are removed before judging, because a templated address is often
+    still informative: `orders.{{ env }}.svc.cluster.local` names `orders` in the part that
+    was not templated, and the k8s resolver reads it correctly. Only what survives the
+    substitution markers is considered.
+    """
+    bare = _TEMPLATE_EXPR.sub("", host or "").strip(" .-_")
+    if not bare or bare in _LOOPBACK:
+        return True
+    if re.search(r"\s", bare):          # prose, e.g. "payments service host"
+        return True
+    return "." not in bare and bool(_DUMMY.match(bare))
 
 
 # --- resolvers -------------------------------------------------------------
@@ -186,11 +218,19 @@ class PortResolver:
     carries no information but the port identifies the service exactly. Only applied to
     loopback addresses: on a real hostname the host itself is the better signal, and a port
     like 8080 is shared by everything.
+
+    "Exactly" holds only while the port is unique. `identity.port` is the port a service
+    LISTENS on and `binding.port` is the port a caller DIALS, and equating them is sound
+    only when one service owns the number. Fleets reuse ports across services, and a tie
+    broken by name order is a guess wearing a label. A shared port is therefore declined
+    outright, which lets `KeyNameResolver` read the key instead.
     """
     name = "port"
 
     def resolve(self, binding, ctx):
         if binding.host not in _LOOPBACK or not binding.port:
+            return None
+        if binding.port in ctx.ambiguous_ports:
             return None
         return ctx.ports.get(binding.port)
 
@@ -200,11 +240,15 @@ class KeyNameResolver:
 
     When the value is uninformative the KEY often names the target. Matched against both
     fleet slugs and the names services declare for themselves in their own config.
+
+    Applies to any host that names nothing, not only loopback: an example config saying
+    `DUMMY` or `payments service host` is as uninformative as `localhost`, and the key
+    beside it is just as likely to be right.
     """
     name = "key-name"
 
     def resolve(self, binding, ctx):
-        if binding.host and binding.host not in _LOOPBACK:
+        if binding.host and not is_placeholder(binding.host):
             return None          # a real host is better evidence than a key name
         for seg in reversed(binding.key.split(".")):
             token = re.sub(r"(?i)_?(HOST|HOSTNAME|URL|URI|ENDPOINT|BASE_URL|BASE_URI|ADDR|ADDRESS|SERVER)$", "", seg)
