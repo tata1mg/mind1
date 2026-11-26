@@ -1,0 +1,30 @@
+packages/mind1/mind1/adapters/hosts.py
+  s_d5ea2fae8a9c21::t_2eb10be1ab0dc9 114-115
+  s_d5ea2fae8a9c21::t_f77d51c0144418 86-87,97
+  s_d5ea2fae8a9c21::t_f09d2a908cd618 139-159
+  s_d5ea2fae8a9c21::t_0b9bdffcd03412 47-52
+  s_d5ea2fae8a9c21::t_6e1ed0c36a8f8a 221-226,233
+  s_d5ea2fae8a9c21::t_502752e92a4d4b 243-246,251
+  s_d5ea2fae8a9c21::t_1a4b8c9678e654 234
+packages/mind1/mind1/resolve.py
+  s_d5ea2fae8a9c21::t_d50025666746dc 157-160,164,168,172-173
+packages/mind1/tests/test_resolve.py
+  s_d5ea2fae8a9c21::t_a3602ac34a32b4 237-300
+  s_d5ea2fae8a9c21::t_9b7340cd1723e0 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5ffa03fce4869d54960751959e57572c5a902672",
+  "prompts": {},
+  "sessions": {
+    "s_d5ea2fae8a9c21": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cd3d904b-2d1f-4977-be3b-f119abb359a7",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Prashant Mishra <prashant.mishra@1mg.com>"
+    }
+  }
+}
