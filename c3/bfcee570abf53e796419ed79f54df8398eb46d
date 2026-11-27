@@ -1,0 +1,33 @@
+packages/mind1/tests/test_codebase.py
+  s_d5ea2fae8a9c21::t_b8bf08b43e39bd 1-115
+packages/mind1/mind1/codebase.py
+  s_d5ea2fae8a9c21::t_0eb85e6377ea61 1-48
+packages/mind1/mind1/enrich/enrich.py
+  s_d5ea2fae8a9c21::t_9b7f4cc0c6c078 17
+  s_d5ea2fae8a9c21::t_c498845f1c23ab 123-124,232-233,235
+packages/mind1/mind1/enrich/gaps.py
+  s_d5ea2fae8a9c21::t_cf0d7358c2c217 24,58,250-251,310
+packages/mind1/mind1/service/relationships.py
+  s_d5ea2fae8a9c21::t_c498845f1c23ab 6,104-106
+packages/mind1/mind1/service/source.py
+  s_d5ea2fae8a9c21::t_8a2dc163c5ea9c 87-91,93
+packages/mind1/mind1/indexing.py
+  s_d5ea2fae8a9c21::t_94be1d40985fe0 24
+  s_d5ea2fae8a9c21::t_6bf8e592e558b7 212-213,225-227
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c3bfcee570abf53e796419ed79f54df8398eb46d",
+  "prompts": {},
+  "sessions": {
+    "s_d5ea2fae8a9c21": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cd3d904b-2d1f-4977-be3b-f119abb359a7",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Prashant Mishra <prashant.mishra@1mg.com>"
+    }
+  }
+}
