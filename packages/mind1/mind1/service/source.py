@@ -84,8 +84,13 @@ class SourceService:
         package is deliberately not a node in the mesh (`indexing.index_one`). Looking only
         under `service:` made every symbol in every library unreadable while `find_symbol`
         and `get_symbol` answered for them normally.
+
+        `codebase:` is the third key. A symbol id names the codebase it was indexed from,
+        and where a repository is deployed more than once that codebase is not a node in
+        the mesh either: the deployments are. Without this, reading a symbol from such a
+        repository would fail the same way library symbols once did.
         """
-        for kind in ("service", "library"):
+        for kind in ("service", "library", "codebase"):
             obj = self.knowledge.get(f"{kind}:{slug}")
             if obj is not None:
                 return str((obj.payload or {}).get("root") or "")

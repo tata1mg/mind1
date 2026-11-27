@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..codebase import codebase_of, interface_prefix
 from ..store.base import KnowledgeStore, RelationshipStore
 
 
@@ -100,7 +101,9 @@ class RelationshipService:
             if hits:
                 resp["did_you_mean"] = hits
             return resp
-        prefix = f"interface:{svc.object_id}:"
+        # Interfaces are filed under the codebase, which for a repository deployed once
+        # is the service's own slug. See mind1.codebase.
+        prefix = interface_prefix(codebase_of(self.knowledge, svc.object_id))
         # Ids are `<type>:<slug>:<rest>`, so one service's interfaces are a contiguous run
         # on the primary key. Scanning every interface in the fleet and filtering in Python
         # took 111ms to return a single row.

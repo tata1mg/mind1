@@ -14,6 +14,7 @@ import hashlib
 import os
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
+from ..codebase import codebase_of, interface_prefix, symbol_prefix
 from ..store.base import KnowledgeStore, SemanticStore
 from .providers import EmbeddingProvider, LLMProvider
 from .repo_docs import declared
@@ -119,7 +120,8 @@ def _exported(knowledge: KnowledgeStore, slug: str, limit: int) -> tuple[list[st
     in a prompt rather than a wrong fact in the index.
     """
     under = getattr(knowledge, "list_objects_under", None)
-    syms = under(f"code_symbol:{slug}:") if under else []
+    cb = codebase_of(knowledge, slug)
+    syms = under(symbol_prefix(cb)) if under else []
     if not syms:
         return [], []
 
@@ -227,9 +229,10 @@ def _svc_ground(obj, knowledge: KnowledgeStore, semantic=None) -> tuple[str, str
     # A prefix range, not a scan: this runs once per service, and loading every interface
     # in the fleet each time cost 155ms a service before any LLM work began.
     under = getattr(knowledge, "list_objects_under", None)
-    ifaces = (under(f"interface:{slug}:") if under
+    cb = codebase_of(knowledge, slug)
+    ifaces = (under(interface_prefix(cb)) if under
               else [i for i in knowledge.list_objects("interface")
-                    if i.id.split(":")[1] == slug])
+                    if i.id.split(":")[1] == cb])
     summary_of = getattr(semantic, "summary_of", None)
 
     lines, shape = [], []
