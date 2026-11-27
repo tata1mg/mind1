@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 
 from .adapters.hosts import HostBinding, ResolveContext, resolve_host, slugish
+from .codebase import CODEBASE
 from .store.base import ContextStore, KnowledgeStore, RelationshipStore
 from .store.models import Relationship
 
@@ -97,6 +98,42 @@ def resolve(knowledge: KnowledgeStore, rels: RelationshipStore, ctx: ContextStor
     interfaces = knowledge.list_objects("interface")
     slugs = {s.object_id for s in services}
 
+    # Interfaces are filed under the codebase, and one codebase can be deployed several
+    # times. A path match therefore identifies the CODE that serves it, not the node a
+    # caller depends on, so every provider slug below is expanded to exactly one
+    # deployment. Emitting one edge per deployment instead would turn exact matches into
+    # ambiguous ones across the whole fleet.
+    runs: dict[str, list[str]] = {}        # codebase -> deployment slugs
+    default_run: dict[str, str] = {}       # codebase -> the deployment edges default to
+    deployment_names: dict[str, str] = {}  # name or alias -> deployment slug
+    for svc in services:
+        cb = str((svc.payload or {}).get(CODEBASE) or svc.object_id)
+        runs.setdefault(cb, []).append(svc.object_id)
+        if (svc.payload or {}).get("default_deployment"):
+            default_run[cb] = svc.object_id
+        deployment_names[slugish(svc.object_id)] = svc.object_id
+        for a in (svc.payload or {}).get("aliases") or []:
+            deployment_names[slugish(a)] = svc.object_id
+    for cb, members in runs.items():
+        # A repository deployed once is its own codebase, so this is the identity mapping
+        # and nothing below changes behaviour for it.
+        default_run.setdefault(cb, sorted(members)[0])
+        # The codebase name is a name callers use, and it means the default deployment.
+        deployment_names.setdefault(slugish(cb), default_run[cb])
+
+    def pick(codebase: str, host_hint: str, declared: set) -> str:
+        """Which deployment of `codebase` this caller depends on."""
+        members = runs.get(codebase) or [codebase]
+        if len(members) == 1:
+            return members[0]
+        named = deployment_names.get(slugish(host_hint)) if host_hint else None
+        if named in members:
+            return named
+        for target in sorted(declared):
+            if target in members:
+                return target
+        return default_run.get(codebase, sorted(members)[0])
+
     # provider index pruned by (method, segment-count) -> [(pattern, slug)]
     index: dict[tuple[str, int], list[tuple[tuple, str]]] = {}
     # channel -> {PUBLISH|CONSUME: [(slug, framework)]}; keyed on the env-normalised name so
@@ -113,11 +150,60 @@ def resolve(knowledge: KnowledgeStore, rels: RelationshipStore, ctx: ContextStor
         index.setdefault((str(p.get("method", "")).upper(), len(pat)), []).append(
             (pat, _slug_of(iface.id)))
 
+    # Config-declared dependencies: a service's config naming another service's address is
+    # evidence of INTENT to call it. Weaker than an observed request path, so it lands at
+    # `config` confidence and is upgraded where a path match corroborates it.
+    declared_edges: dict[tuple[str, str], dict] = {}
+    ports: dict[str, str] = {}
+    aliases: dict[str, str] = {}
+    # A port claimed by more than one service identifies neither. Collected before any
+    # binding is resolved, because which services claim it is a fleet-level fact and the
+    # alternative, letting the first one seen win, decides it by name order.
+    # Claimed per CODEBASE, not per node: deployments of one repository read one config,
+    # so they all report the same listen port, and counting them separately would make
+    # every such port look contested.
+    claims: dict[str, set[str]] = {}
+    for svc in services:
+        ident = svc.payload.get("identity") or {}
+        cb = str((svc.payload or {}).get(CODEBASE) or svc.object_id)
+        if ident.get("port"):
+            claims.setdefault(str(ident["port"]), set()).add(cb)
+            ports.setdefault(str(ident["port"]), default_run.get(cb, svc.object_id))
+        if ident.get("name"):
+            aliases.setdefault(slugish(ident["name"]), default_run.get(cb, svc.object_id))
+    ambiguous_ports = {p for p, owners in claims.items() if len(owners) > 1}
+    # Declared deployment names and aliases are names callers use, so the host resolvers
+    # must see them. They never override a name a service claimed for itself.
+    for name, target in deployment_names.items():
+        aliases.setdefault(name, target)
+    for svc in services:
+        cslug = svc.object_id
+        ctx_h = ResolveContext(slugs=slugs, declared=svc.payload.get("declared_hosts") or {},
+                               ports=ports, aliases=aliases,
+                               ambiguous_ports=ambiguous_ports)
+        for b in svc.payload.get("host_bindings") or []:
+            target = resolve_host(HostBinding(key=b.get("key", ""), value=b.get("value", ""),
+                                              host=b.get("host", ""), port=b.get("port", "")), ctx_h)
+            if not target or target == cslug:
+                continue
+            meta = declared_edges.setdefault((cslug, target), {"keys": [], "hosts": set()})
+            meta["keys"].append(b.get("key"))
+            meta["hosts"].add(b.get("host"))
+    # Every edge below needs to know which deployment a caller already names in
+    # its own config, so the declared pass runs first and the path pass reads it.
+    declared_by: dict[str, set] = {}
+    for (a, b) in declared_edges:
+        declared_by.setdefault(a, set()).add(b)
+
     edges: list[Relationship] = []
     unresolved = external = unspecific = 0
     for svc in services:
         consumer = svc.id  # service:<slug>
         cslug = svc.object_id
+        # Compared against interface slugs, which name a codebase. Without this a
+        # deployment would be treated as calling its own sibling.
+        ccode = str((svc.payload or {}).get(CODEBASE) or cslug)
+        mine = declared_by.get(cslug, set())
         best: dict[str, dict] = {}  # provider_slug -> edge metadata (dedup per pair)
         for call in svc.payload.get("outbound", []):
             if is_external_host(call.get("host") or "", slugs):
@@ -132,53 +218,27 @@ def resolve(knowledge: KnowledgeStore, rels: RelationshipStore, ctx: ContextStor
                 continue
             method = str(call.get("verb", "")).upper()
             providers = sorted({slug for pat, slug in index.get((method, len(cpat)), [])
-                                if slug != cslug and _matches(cpat, pat)})
+                                if slug != ccode and _matches(cpat, pat)})
             if not providers:
                 unresolved += 1
                 continue
             host_hint = (call.get("host") or "").replace("_", "-")
-            for prov in providers:
+            # One edge per matched CODEBASE, aimed at one of its deployments. Confidence
+            # still counts codebases: three deployments of one codebase are one candidate,
+            # not three.
+            for code in providers:
+                prov = pick(code, host_hint, mine)
                 meta = best.setdefault(prov, {"paths": [], "confidence":
                                               "high" if len(providers) == 1 else "ambiguous"})
                 meta["paths"].append(call.get("path"))
-                if host_hint and (host_hint == prov or prov in host_hint):
+                if host_hint and (host_hint == prov or prov in host_hint
+                                  or host_hint == code or code in host_hint):
                     meta["confidence"] = "corroborated"
         for prov, meta in best.items():
             edges.append(Relationship(consumer, "calls", f"service:{prov}", SOURCE,
                                       {"via_paths": sorted(set(meta["paths"]))[:10],
                                        "confidence": meta["confidence"]}))
 
-    # Config-declared dependencies: a service's config naming another service's address is
-    # evidence of INTENT to call it. Weaker than an observed request path, so it lands at
-    # `config` confidence and is upgraded where a path match corroborates it.
-    declared_edges: dict[tuple[str, str], dict] = {}
-    ports: dict[str, str] = {}
-    aliases: dict[str, str] = {}
-    # A port claimed by more than one service identifies neither. Collected before any
-    # binding is resolved, because which services claim it is a fleet-level fact and the
-    # alternative, letting the first one seen win, decides it by name order.
-    claims: dict[str, set[str]] = {}
-    for svc in services:
-        ident = svc.payload.get("identity") or {}
-        if ident.get("port"):
-            claims.setdefault(str(ident["port"]), set()).add(svc.object_id)
-            ports.setdefault(str(ident["port"]), svc.object_id)
-        if ident.get("name"):
-            aliases.setdefault(slugish(ident["name"]), svc.object_id)
-    ambiguous_ports = {p for p, owners in claims.items() if len(owners) > 1}
-    for svc in services:
-        cslug = svc.object_id
-        ctx_h = ResolveContext(slugs=slugs, declared=svc.payload.get("declared_hosts") or {},
-                               ports=ports, aliases=aliases,
-                               ambiguous_ports=ambiguous_ports)
-        for b in svc.payload.get("host_bindings") or []:
-            target = resolve_host(HostBinding(key=b.get("key", ""), value=b.get("value", ""),
-                                              host=b.get("host", ""), port=b.get("port", "")), ctx_h)
-            if not target or target == cslug:
-                continue
-            meta = declared_edges.setdefault((cslug, target), {"keys": [], "hosts": set()})
-            meta["keys"].append(b.get("key"))
-            meta["hosts"].add(b.get("host"))
     observed = {(e.from_id.split(":", 1)[1], e.to_id.split(":", 1)[1])
                 for e in edges if e.relationship == "calls"}
     for (a, b), meta in declared_edges.items():

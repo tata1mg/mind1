@@ -208,7 +208,13 @@ class SlugMatchResolver:
     def resolve(self, binding, ctx):
         if _THIRD_PARTY.search(binding.host):
             return None
-        return _match_slug(binding.host, ctx.slugs)
+        hit = _match_slug(binding.host, ctx.slugs)
+        if hit:
+            return hit
+        # A deployment alias is a name callers address a service by, so it belongs here as
+        # much as a slug does. Checked second: a real slug is never overridden by one.
+        alias = _match_slug(binding.host, set(ctx.aliases))
+        return ctx.aliases.get(alias) if alias else None
 
 
 class PortResolver:
