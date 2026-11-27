@@ -187,6 +187,35 @@ def _extract_service(repo: Path, spec: ServiceSpec, *, default_language: str = "
             "language": language, "call_graph_ok": call_graph_ok}
 
 
+def _load_deployments(slug, root, spec, common: dict, store: SqliteStore) -> None:
+    """Write one codebase object and one service node per declared deployment.
+
+    The code was indexed once, under `slug`, so the symbols and interfaces already in the
+    store belong to the codebase rather than to any one deployment. The codebase gets an
+    object of its own because `get_source` resolves a symbol's slug to a root, and with
+    deployments that slug names no service.
+
+    Every deployment carries the same payload for now. Narrowing which routes and queues
+    each one owns is the harder half of #12 and needs a path selector; until then a
+    deployment over-reports its interfaces, which is what one node owning everything
+    already did.
+    """
+    store.upsert_object(KnowledgeObject(
+        object_type="codebase", object_id=slug, name=slug, summary=None, version="unknown",
+        source="static", generation_strategy="index", last_generated_at=None,
+        embed_text=None,
+        payload={"root": str(root), "symbol_count": common.get("symbol_count", 0),
+                 "interface_count": common.get("interface_count", 0),
+                 "deployments": [d.name for d in spec.deployments]}))
+    for d in spec.deployments:
+        store.upsert_object(KnowledgeObject(
+            object_type="service", object_id=d.name, name=d.name, summary=None,
+            version="unknown", source="static", generation_strategy="index",
+            last_generated_at=None, embed_text=None,
+            payload={**common, CODEBASE: slug, "aliases": list(d.aliases),
+                     "default_deployment": bool(d.default)}))
+
+
 def _load_service(x: dict, store: SqliteStore, *, llm=None, progress=None, stats=None) -> dict:
     """Write one extracted service into the store. Serial by design; milliseconds."""
     tick = stats.step if stats is not None else _noop_step
@@ -217,22 +246,26 @@ def _load_service(x: dict, store: SqliteStore, *, llm=None, progress=None, stats
                        call_graph="ok" if x["call_graph_ok"] else "unavailable")
         return summary
 
-    store.upsert_object(KnowledgeObject(
-        object_type="service", object_id=slug, name=slug, summary=None, version="unknown",
-        source="static", generation_strategy="index", last_generated_at=None, embed_text=None,
-        payload={"symbol_count": summary["nodes"],
-                 "interface_count": iface_summary.get("interfaces", 0),
-                 # Which indexed code this node is made of. The same string for a
-                 # repository deployed once; see mind1.codebase.
-                 CODEBASE: slug,
-                 "outbound": x["outbound"], "host_bindings": x["host_bindings"],
-                 "declared_hosts": dict(spec.hosts or {}), "identity": x["identity"],
-                 "root": str(root), "skipped": x["skipped"],
-                 "dependencies": x.get("dependencies", []),
-                 # Declared: the one value that picked the SCIP indexer. Observed: what
-                 # the files say, which is what a rule scoped to a language matches on.
-                 "language": x.get("language", "auto"),
-                 "languages": x.get("languages", [])}))
+    common = {"symbol_count": summary["nodes"],
+              "interface_count": iface_summary.get("interfaces", 0),
+              # Which indexed code this node is made of. The same string for a
+              # repository deployed once; see mind1.codebase.
+              CODEBASE: slug,
+              "outbound": x["outbound"], "host_bindings": x["host_bindings"],
+              "declared_hosts": dict(spec.hosts or {}), "identity": x["identity"],
+              "root": str(root), "skipped": x["skipped"],
+              "dependencies": x.get("dependencies", []),
+              # Declared: the one value that picked the SCIP indexer. Observed: what
+              # the files say, which is what a rule scoped to a language matches on.
+              "language": x.get("language", "auto"),
+              "languages": x.get("languages", [])}
+    if spec.deployments:
+        _load_deployments(slug, root, spec, common, store)
+    else:
+        store.upsert_object(KnowledgeObject(
+            object_type="service", object_id=slug, name=slug, summary=None,
+            version="unknown", source="static", generation_strategy="index",
+            last_generated_at=None, embed_text=None, payload=common))
     store.commit()
 
     summary["slug"] = slug

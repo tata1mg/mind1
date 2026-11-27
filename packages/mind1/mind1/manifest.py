@@ -46,11 +46,33 @@ class ServiceSpec:
     language: str = "auto"   # "auto" | "python" | "typescript"
     hosts: dict = field(default_factory=dict)   # declared host -> service name
     library: bool = False    # code only: symbols are indexed, but it is not a mesh service
+    #: Runtime instances of this code. Empty for the usual one-deployment repository, in
+    #: which case the spec itself is the service node.
+    deployments: list = field(default_factory=list)
+
+
+@dataclass
+class Deployment:
+    """One runtime instance of a repository's code.
+
+    A repository is often deployed several times from one image, with a runtime switch
+    deciding what each instance does, and callers address each by its own name. They are
+    separate nodes in the mesh and the same codebase, so they are declared rather than
+    inferred: a rule that collapses `orders` and `orders_client` would also collapse two
+    services that merely have similar names.
+    """
+    name: str
+    #: Other names callers use for this deployment. Matched, never created as nodes.
+    aliases: list = field(default_factory=list)
+    #: Where an edge goes when nothing in the caller says which deployment it means.
+    default: bool = False
 
 
 @dataclass
 class Manifest:
     services: list[ServiceSpec] = field(default_factory=list)
+    #: Runtime instances of this repository's single codebase.
+    deployments: list = field(default_factory=list)
     library_paths: list[str] = field(default_factory=list)
     #: Sub-paths holding authored guidance. Not code: never indexed, never a service.
     guidance_paths: list[str] = field(default_factory=list)
@@ -101,7 +123,55 @@ def load_manifest(repo: Path) -> Optional[Manifest]:
                                     language=str(entry.get("language", "auto"))))
     libs = [str(e.get("path")) for e in (raw.get("libraries", []) or []) if e.get("path")]
     rules = [str(e.get("path")) for e in (raw.get("guidance", []) or []) if e.get("path")]
-    return Manifest(services=services, library_paths=libs, guidance_paths=rules, hosts=hosts)
+    deployments = _deployments(raw, path, bool(services or libs))
+    return Manifest(services=services, library_paths=libs, guidance_paths=rules, hosts=hosts,
+                    deployments=deployments)
+
+
+def _deployments(raw: dict, path: Path, has_parts: bool) -> list:
+    """Parse and validate `deployments:`.
+
+    Validated here rather than at resolve time because every one of these mistakes makes
+    the graph wrong rather than incomplete, and a wrong graph gives no sign of it. No
+    default means edges with no host evidence have no owner; a duplicate name means two
+    nodes claim one address.
+    """
+    entries = raw.get("deployments") or []
+    if not entries:
+        return []
+    if has_parts:
+        raise ManifestError(
+            f"{path.name}: 'deployments' describes one codebase deployed several times, "
+            f"and 'services'/'libraries' split a repository into separate codebases. "
+            f"Declaring both leaves it undecided which code each deployment runs.")
+    out, names, aliases = [], {}, {}
+    for entry in entries:
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            raise ManifestError(f"{path.name}: a deployment entry is missing 'name'")
+        if name in names:
+            raise ManifestError(f"{path.name}: duplicate deployment name '{name}'")
+        names[name] = True
+        got = [str(a).strip() for a in (entry.get("aliases") or []) if str(a).strip()]
+        for a in got:
+            if a in aliases:
+                raise ManifestError(
+                    f"{path.name}: alias '{a}' is claimed by both '{aliases[a]}' and '{name}'")
+            aliases[a] = name
+        out.append(Deployment(name=name, aliases=got, default=bool(entry.get("default"))))
+    for a, owner in aliases.items():
+        if a in names:
+            raise ManifestError(
+                f"{path.name}: alias '{a}' on '{owner}' is also a deployment name")
+    defaults = [d.name for d in out if d.default]
+    if not defaults:
+        raise ManifestError(
+            f"{path.name}: one deployment must be marked 'default: true'. It receives "
+            f"edges from callers whose config names no deployment in particular.")
+    if len(defaults) > 1:
+        raise ManifestError(
+            f"{path.name}: only one deployment can be default, found {sorted(defaults)}")
+    return out
 
 
 def guidance_roots(repo: Path) -> list[Path]:
@@ -129,6 +199,11 @@ def resolve_services(repo: Path, default_name: Optional[str] = None) -> list[Ser
     if manifest and manifest.guidance_paths and not (manifest.services
                                                      or manifest.library_paths):
         return []
+    if manifest and manifest.deployments:
+        # One codebase, several nodes. Indexed once under the repository; the deployments
+        # are written as services that point at it.
+        return [ServiceSpec(name=default_name or repo.name, path=".", language="auto",
+                            hosts=hosts, deployments=list(manifest.deployments))]
     if manifest and (manifest.services or manifest.library_paths):
         specs = []
         for spec in manifest.services:
