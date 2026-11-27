@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..adapters.base import Interface
+from ..codebase import codebase_of, interface_prefix, symbol_prefix
 from ..store.base import ContextStore, KnowledgeStore, RelationshipStore
 from ..store.models import KnowledgeObject, Relationship
 from .providers import LLMProvider
@@ -54,7 +55,7 @@ def _context(knowledge: KnowledgeStore, slug: str, root: Path, names: list[str])
     """Source of up to N symbols in this service whose name matches an identifier the
     unresolved expression uses. Classes/modules first: a `Model.uri()` call is usually
     answered by the class body, not the accessor."""
-    prefix = f"code_symbol:{slug}:"
+    prefix = symbol_prefix(codebase_of(knowledge, slug))
     picked: list[KnowledgeObject] = []
     seen: set[str] = set()
     for n in names:
@@ -246,7 +247,8 @@ def fill_gaps(store, llm: LLMProvider, *, only_slug: Optional[str] = None,
         root = Path(svc.payload["root"])
         done: dict = dict(svc.payload.get("gaps") or {})
         static_keys = {(o.payload.get("method"), o.payload.get("path"))
-                       for o in knowledge.list_objects("interface") if o.id.startswith(f"interface:{slug}:")}
+                       for o in knowledge.list_objects("interface")
+                       if o.id.startswith(interface_prefix(codebase_of(knowledge, slug)))}
         outbound = list(svc.payload.get("outbound") or [])
         symbols: Optional[list[KnowledgeObject]] = None  # loaded lazily, once per service
         touched = False
@@ -305,7 +307,7 @@ def fill_gaps(store, llm: LLMProvider, *, only_slug: Optional[str] = None,
                 if (method, path) not in static_keys:
                     if symbols is None:
                         symbols = [o for o in knowledge.list_objects("code_symbol")
-                                   if o.id.startswith(f"code_symbol:{slug}:")]
+                                   if o.id.startswith(symbol_prefix(codebase_of(knowledge, slug)))]
                     handler = _handler_for(symbols, site["file"], int(site["line"]))
                     iface = _iface_object(slug, method, path, site, chash, handler)
                     ctx.upsert_object(iface)

@@ -21,6 +21,7 @@ from .adapters.outbound import discover_outbound as _py_outbound
 from .adapters.ruby_outbound import discover_outbound as _rb_outbound
 from .adapters.ts_outbound import discover_outbound as _ts_outbound
 from .callgraph import cli as cg_cli
+from .codebase import CODEBASE
 from .loaders import callgraph as cg_loader
 from .loaders import interfaces as iface_loader
 from .manifest import (
@@ -208,7 +209,8 @@ def _load_service(x: dict, store: SqliteStore, *, llm=None, progress=None, stats
             object_type="library", object_id=slug, name=slug, summary=None,
             version="unknown", source="static", generation_strategy="index",
             last_generated_at=None, embed_text=None,
-            payload={"symbol_count": summary["nodes"], "root": str(root)}))
+            payload={"symbol_count": summary["nodes"], "root": str(root),
+                     CODEBASE: slug}))
         store.commit()
         summary.update(slug=slug, library=True, interfaces=0, outbound=0,
                        host_bindings=0, skipped=0,
@@ -220,6 +222,9 @@ def _load_service(x: dict, store: SqliteStore, *, llm=None, progress=None, stats
         source="static", generation_strategy="index", last_generated_at=None, embed_text=None,
         payload={"symbol_count": summary["nodes"],
                  "interface_count": iface_summary.get("interfaces", 0),
+                 # Which indexed code this node is made of. The same string for a
+                 # repository deployed once; see mind1.codebase.
+                 CODEBASE: slug,
                  "outbound": x["outbound"], "host_bindings": x["host_bindings"],
                  "declared_hosts": dict(spec.hosts or {}), "identity": x["identity"],
                  "root": str(root), "skipped": x["skipped"],
