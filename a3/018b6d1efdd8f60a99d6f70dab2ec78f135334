@@ -1,0 +1,36 @@
+packages/mind1/mind1/manifest.py
+  s_d5ea2fae8a9c21::t_726bae840c4318 49-51,202-206
+  s_d5ea2fae8a9c21::t_70df6572924d54 55-68,74-75,126-174
+  s_d5ea2fae8a9c21::t_7f5bb10e63d884 52-54
+packages/mind1/mind1/resolve.py
+  s_d5ea2fae8a9c21::t_32bc816e8ae3e6 162-164,168,170-171,173,175-178
+  s_d5ea2fae8a9c21::t_6412401d75f52e 153-161,165-167,169,172,174,179-197
+  s_d5ea2fae8a9c21::t_7b575e61f29b47 101-136
+  s_d5ea2fae8a9c21::t_8d47c2dc6cc6b5 21,203-206,221,226-230,234-235
+packages/mind1/mind1/indexing.py
+  s_d5ea2fae8a9c21::t_726bae840c4318 249,262-268
+  s_d5ea2fae8a9c21::t_bb44d17c1327ce 190-218,250-261
+packages/mind1/tests/test_deployments.py
+  s_d5ea2fae8a9c21::t_2af858f8e53e97 1-116,119-122,124-180,184-200,203-222
+  s_d5ea2fae8a9c21::t_c01afe4e273999 117-118,123,201-202
+  s_d5ea2fae8a9c21::t_4d83f6fcb265c1 181-183
+packages/mind1/mind1/adapters/hosts.py
+  s_d5ea2fae8a9c21::t_88a1e0183e7914 216-217
+  s_d5ea2fae8a9c21::t_32bc816e8ae3e6 211-215
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a3018b6d1efdd8f60a99d6f70dab2ec78f135334",
+  "prompts": {},
+  "sessions": {
+    "s_d5ea2fae8a9c21": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cd3d904b-2d1f-4977-be3b-f119abb359a7",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Prashant Mishra <prashant.mishra@1mg.com>"
+    }
+  }
+}
